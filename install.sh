@@ -11,14 +11,12 @@ if ! grep -qi fedora /etc/os-release; then
     exit 1
 fi
 
-echo "[+] Installing core system dependencies..."
-dnf install -y tor nftables curl jq iproute procps-ng bind-utils python3 python3-pip
+SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
 
-echo "[+] Installing UI dependencies..."
-pip3 install rich asciichartpy requests
+echo "[+] Installing core platform packages..."
+dnf install -y tor nftables curl jq iproute procps-ng bind-utils bc
 
-echo "[+] Configuring Tor daemon for transparent routing..."
-# Ensure TransPort and DNSPort configurations are in torrc if not present
+echo "[+] Injecting transparent routing layers to /etc/tor/torrc..."
 if ! grep -q "TransPort 9040" /etc/tor/torrc; then
     cat <<EOF >> /etc/tor/torrc
 
@@ -30,15 +28,16 @@ DNSPort 5353
 EOF
 fi
 
-echo "[+] Deploying system binaries..."
-cp torsurf-core /usr/local/bin/torsurf-core
-cp torsurf /usr/local/bin/torsurf
+echo "[+] Registering binaries to global system path (/usr/local/bin/)..."
+cp "$SCRIPT_DIR/utils/torsurf-core" /usr/local/bin/torsurf-core
+cp "$SCRIPT_DIR/torsurf" /usr/local/bin/torsurf
 
 chmod +x /usr/local/bin/torsurf-core
 chmod +x /usr/local/bin/torsurf
 
-echo "[+] Enabling services..."
+echo "[+] Preparing network interface hooks..."
 systemctl enable tor.service
 systemctl enable nftables.service
 
-echo -e "\n[+] TorSurf installed successfully! Run 'torsurf start' as a normal user."
+echo -e "\n[+] Installation Complete!"
+echo "You can now open any terminal window and simply type: torsurf"

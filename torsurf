@@ -1,0 +1,147 @@
+#!/usr/bin/env bash
+
+# Terminal Escape Colors
+RESET="\e[0m"
+BOLD="\e[1m"
+GREEN="\e[32m"
+RED="\e[31m"
+YELLOW="\e[33m"
+CYAN="\e[36m"
+MAGENTA="\e[35m"
+WHITE_ON_PURPLE="\e[1;37;45m"
+
+declare -a HISTORY=()
+for i in {1..40}; do HISTORY+=(0); done
+
+BACKEND="/usr/local/bin/torsurf-core"
+
+get_network_bytes() {
+    local rx tx total
+    total=0
+    while read -r line; do
+
+        if [[ "$line" =~ : ]] && [[ ! "$line" =~ lo: ]]; then
+            rx=$(echo "$line" | awk '{print $2}')
+            tx=$(echo "$line" | awk '{print $10}')
+            total=$((total + rx + tx))
+        fi
+    done < /proc/net/dev
+    echo "$total"
+}
+
+get_tor_ip() {
+    curl -s --connect-timeout 3 https://check.torproject.org/api/ip | jq -r '.IP // "Protected / Rebuilding Circuit"' 2>/dev/null || echo "Isolated"
+}
+
+# graph functions
+
+draw_graph() {
+    local max=1
+    # Find scale ceiling
+    for val in "${HISTORY[@]}"; do
+        if (( $(echo "$val > $max" | bc -l) )); then
+            max=$val
+        fi
+    done
+
+    local blocks=(" " " " "▂" "▃" "▄" "▅" "▆" "▇" "█")
+    
+    echo -e "${CYAN}Real-time Throughput Map:${RESET}"
+    echo -n "  ["
+    for val in "${HISTORY[@]}"; do
+        #  proportional index : maximum peaks
+        local idx=$(echo "scale=0; ($val * 8) / $max" | bc 2>/dev/null || echo 0)
+        if [ "$idx" -gt 8 ]; then idx=8; fi
+        if [ "$idx" -lt 0 ]; then idx=0; fi
+        echo -n -e "${CYAN}${blocks[$idx]}${RESET}"
+    done
+    echo "]"
+    printf "  Peak Volume: %.2f KB/s\n" "$max"
+}
+
+# GUi dashboard
+
+render_dashboard() {
+    local ip="$1"
+    local speed="$2"
+    
+    clear
+    echo -e "${CYAN}====================================================${RESET}"
+    echo -e "       ${BOLD}${GREEN}⚡ TORSURF ANONYMITY CONSOLE (BASH) ⚡${RESET}"
+    echo -e "${CYAN}====================================================${RESET}"
+    echo -e "${GREEN}✔ STATUS:${RESET} Tor Tunnel Active"
+    echo -e "${CYAN}⚙ PROXY INTERFACE:${RESET} TransPort (9040) -> DNSPort (5353)"
+    echo -e "${MAGENTA}🌍 EXIT IP ADDR:${RESET} ${WHITE_ON_PURPLE} ${ip} ${RESET}"
+    printf "${YELLOW}🗲 THROUGHPUT:${RESET} %.2f KB/s\n\n" "$speed"
+    
+    draw_graph
+    echo -e "${CYAN}====================================================${RESET}"
+    echo "Press [Ctrl+C] to exit dashboard view (Tunnel stays active)."
+}
+
+# Argument evaluation
+case "${1,,}" in
+    start)
+        if sudo "$BACKEND" status | grep -q "ACTIVE"; then
+            echo -e "${YELLOW}[!] TorSurf routing is already active.${RESET}"
+            exit 0
+        fi
+
+        echo -n -e "${YELLOW}[*] Spinning up Tor daemon & isolated rulesets... ${RESET}"
+        if sudo "$BACKEND" start | grep -q "SUCCESS"; then
+            echo -e "${GREEN}✔ Done.${RESET}"
+        else
+            echo -e "${RED}✘ Firewall rules activation failed.${RESET}"
+            exit 1
+        fi
+
+        echo -n -e "${YELLOW}[*] Validating secure hub parameters... ${RESET}"
+        TOR_IP=$(get_tor_ip)
+        echo -e "${GREEN}✔ Verified Context.${RESET}"
+
+        LAST_BYTES=$(get_network_bytes)
+        sleep 1
+
+        trap 'echo -e "\n\n${YELLOW}[!] Detached from monitor. Run \"torsurf stop\" to tear down interface.${RESET}"; exit 0' INT
+        
+        while true; do
+            CURRENT_BYTES=$(get_network_bytes)
+            BYTES_DELTA=$((CURRENT_BYTES - LAST_BYTES))
+            LAST_BYTES=$CURRENT_BYTES
+            
+            KB_SPEED=$(echo "scale=2; $BYTES_DELTA / 1024.0" | bc)
+            
+            HISTORY=("${HISTORY[@]:1}" "$KB_SPEED")
+            
+            render_dashboard "$TOR_IP" "$KB_SPEED"
+            sleep 1
+        done
+        ;;
+        
+    stop)
+        if sudo "$BACKEND" status | grep -q "INACTIVE"; then
+            echo -e "${YELLOW}[!] Routing table already clean.${RESET}"
+            exit 0
+        fi
+
+        echo -n -e "${RED}[*] Flushing nftables chains & stopping services... ${RESET}"
+        if sudo "$BACKEND" stop | grep -q "SUCCESS"; then
+            echo -e "${GREEN}✔ Base clearnet profile restored successfully.${RESET}"
+        else
+            echo -e "${RED}✘ Operational warnings reported during teardown.${RESET}"
+        fi
+        ;;
+        
+    status)
+        if sudo "$BACKEND" status | grep -q "ACTIVE"; then
+            echo -e "${GREEN}● TorSurf is Routing Network Traffic securely.${RESET}"
+        else
+            echo -e "${RED}○ TorSurf is completely idle.${RESET}"
+        fi
+        ;;
+        
+    *)
+        echo -e "${RED}Usage:${RESET} torsurf {start|stop|status}"
+        exit 1
+        ;;
+esac
