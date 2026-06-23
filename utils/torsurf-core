@@ -11,40 +11,47 @@ BACKUP_FILE="/tmp/torsurf_nft_backup.nft"
 case "$1" in
     start)
         nft list ruleset > "$BACKUP_FILE" 2>/dev/null || true
+
         systemctl start tor
+
         sleep 2
         if ! ss -tlnp | grep -q :9040; then
             echo "ERROR: Tor TransPort (9040) is not listening. Check systemctl status tor" >&2
             exit 1
         fi
-        cat <<EOF > /tmp/torsurf_rules.nft
 
-table ip torsurf {
+        cat <<EOF > /tmp/torsurf_rules.nft
+table inet torsurf {
     chain output {
         type filter hook output priority filter; policy drop;
 
-        # Allow local loopback
+        # Allow localhost traffic
         oifname "lo" accept
 
-        # Allow Tor daemon user (toranon) to talk directly to the internet
-        meta skuid "toranon" accept
+        # Crucial Fix: Fedora uses the "tor" user, not "toranon"
+        meta skuid "tor" accept
 
-        # Route all local DNS query traffic to Tor's DNSPort
+        # Intercept and route DNS traffic directly to Tor's DNSPort
         udp dport 53 redirect to :5353
         tcp dport 53 redirect to :5353
 
-        # Route all local TCP traffic to Tor's TransPort
-        meta l4proto tcp redirect to :9040
+        # Force all remaining IPv4 TCP traffic through Tor's TransPort
+        meta nfproto ipv4 meta l4proto tcp redirect to :9040
+
+        # Drop everything else (Blocks raw UDP, ICMP, and all IPv6 leaks)
+        drop
     }
 }
 EOF
+        # Load and clean up tracking configuration files
         nft -f /tmp/torsurf_rules.nft
         rm -f /tmp/torsurf_rules.nft
         echo "SUCCESS"
         ;;
 
     stop)
-        nft delete table ip torsurf 2>/dev/null || true
+        # Drop the dual-stack isolation rules table
+        nft delete table inet torsurf 2>/dev/null || true
 
         if [ -f "$BACKUP_FILE" ]; then
             nft flush ruleset
@@ -57,10 +64,12 @@ EOF
         ;;
 
     status)
-        if nft list table ip torsurf &>/dev/null; then
+        if nft list table inet torsurf &>/dev/null; then
             echo "ACTIVE"
+            exit 0
         else
             echo "INACTIVE"
+            exit 1
         fi
         ;;
     *)
