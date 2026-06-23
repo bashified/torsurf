@@ -7,51 +7,90 @@ if [ "$EUID" -ne 0 ]; then
 fi
 
 BACKUP_FILE="/tmp/torsurf_nft_backup.nft"
+TOR_LOG="/tmp/torsurf_tor.log"
 
 case "$1" in
     start)
         nft list ruleset > "$BACKUP_FILE" 2>/dev/null || true
 
-        systemctl start tor
+        mkdir -p /run/tor /var/lib/tor
+        chown -R toranon:toranon /run/tor /var/lib/tor
+        chmod 700 /run/tor /var/lib/tor
 
-        sleep 2
-        if ! ss -tlnp | grep -q :9040; then
-            echo "ERROR: Tor TransPort (9040) is not listening. Check systemctl status tor" >&2
-            exit 1
-        fi
+        # Clear out any stale service operations
+        systemctl stop tor 2>/dev/null || true
+        pkill -u toranon tor 2>/dev/null || true
+        rm -f "$TOR_LOG"
+
+        echo "Launching background proxy layer..."
+        sudo -u toranon tor --runasdaemon 1 --log "notice file $TOR_LOG"
+
+        echo "Waiting for core handshake completion (this can take up to 30s)..."
+        TIMEOUT=30
+        while ! grep -q "Bootstrapped 100%" "$TOR_LOG" 2>/dev/null; do
+            sleep 1
+            TIMEOUT=$((TIMEOUT - 1))
+            if [ "$TIMEOUT" -le 0 ]; then
+                echo "ERROR: Tor handshake timed out. Check logs at $TOR_LOG" >&2
+                pkill -u toranon tor 2>/dev/null || true
+                exit 1
+            fi
+        done
+
+        echo "Tor circuit online! Deploying absolute firewall isolation..."
 
         cat <<EOF > /tmp/torsurf_rules.nft
-table inet torsurf {
+# Explicitly drop IPv6 traffic entirely to prevent dual-stack leaks
+table ip6 torsurf_kill_v6 {
     chain output {
         type filter hook output priority filter; policy drop;
+    }
+}
 
-        # Allow localhost traffic
+# Process all IPv4 routing inside a strict IP-family container
+table ip torsurf {
+    chain nat_output {
+        type nat hook output priority filter; policy accept;
+
+        # Completely bypass routing engines for local interfaces
         oifname "lo" accept
 
-        # Crucial Fix: Fedora uses the "tor" user, not "toranon"
-        meta skuid "tor" accept
+        # Allow the Tor process user to bypass the proxy to talk to the real internet
+        meta skuid "toranon" accept
 
-        # Intercept and route DNS traffic directly to Tor's DNSPort
+        # Intercept local system DNS requests and reroute to Tor's DNS engine
         udp dport 53 redirect to :5353
         tcp dport 53 redirect to :5353
 
-        # Force all remaining IPv4 TCP traffic through Tor's TransPort
-        meta nfproto ipv4 meta l4proto tcp redirect to :9040
+        # Force all remaining system-wide TCP traffic directly into the Tor Tunnel
+        meta l4proto tcp redirect to :9040
+    }
 
-        # Drop everything else (Blocks raw UDP, ICMP, and all IPv6 leaks)
+    chain filter_output {
+        type filter hook output priority filter; policy accept;
+
+        # Always permit local loopback interface traffic
+        oifname "lo" accept
+
+        # Always permit Tor's core traffic out to the web
+        meta skuid "toranon" accept
+
+        # Allow established network sessions to maintain state flow
+        ct state established,related accept
+
+        # Drop any raw UDP or stray traffic trying to bypass the proxy
         drop
     }
 }
 EOF
-        # Load and clean up tracking configuration files
         nft -f /tmp/torsurf_rules.nft
         rm -f /tmp/torsurf_rules.nft
         echo "SUCCESS"
         ;;
 
     stop)
-        # Drop the dual-stack isolation rules table
-        nft delete table inet torsurf 2>/dev/null || true
+        nft delete table ip torsurf 2>/dev/null || true
+        nft delete table ip6 torsurf_kill_v6 2>/dev/null || true
 
         if [ -f "$BACKUP_FILE" ]; then
             nft flush ruleset
@@ -59,12 +98,13 @@ EOF
             rm -f "$BACKUP_FILE"
         fi
 
-        systemctl stop tor
+        pkill -u toranon tor 2>/dev/null || true
+        rm -f "$TOR_LOG"
         echo "SUCCESS"
         ;;
 
     status)
-        if nft list table inet torsurf &>/dev/null; then
+        if nft list table ip torsurf &>/dev/null; then
             echo "ACTIVE"
             exit 0
         else
