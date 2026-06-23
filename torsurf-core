@@ -1,0 +1,70 @@
+#!/usr/bin/env bash
+set -e
+
+if [ "$EUID" -ne 0 ]; then
+    echo "ERROR: This backend must run as root." >&2
+    exit 1
+fi
+
+BACKUP_FILE="/tmp/torsurf_nft_backup.nft"
+
+case "$1" in
+    start)
+        nft list ruleset > "$BACKUP_FILE" 2>/dev/null || true
+        systemctl start tor
+        sleep 2
+        if ! ss -tlnp | grep -q :9040; then
+            echo "ERROR: Tor TransPort (9040) is not listening. Check systemctl status tor" >&2
+            exit 1
+        fi
+        cat <<EOF > /tmp/torsurf_rules.nft
+
+table ip torsurf {
+    chain output {
+        type filter hook output priority filter; policy drop;
+
+        # Allow local loopback
+        oifname "lo" accept
+
+        # Allow Tor daemon user (toranon) to talk directly to the internet
+        meta skuid "toranon" accept
+
+        # Route all local DNS query traffic to Tor's DNSPort
+        udp dport 53 redirect to :5353
+        tcp dport 53 redirect to :5353
+
+        # Route all local TCP traffic to Tor's TransPort
+        meta l4proto tcp redirect to :9040
+    }
+}
+EOF
+        nft -f /tmp/torsurf_rules.nft
+        rm -f /tmp/torsurf_rules.nft
+        echo "SUCCESS"
+        ;;
+
+    stop)
+        nft delete table ip torsurf 2>/dev/null || true
+
+        if [ -f "$BACKUP_FILE" ]; then
+            nft flush ruleset
+            nft -f "$BACKUP_FILE" 2>/dev/null || true
+            rm -f "$BACKUP_FILE"
+        fi
+
+        systemctl stop tor
+        echo "SUCCESS"
+        ;;
+
+    status)
+        if nft list table ip torsurf &>/dev/null; then
+            echo "ACTIVE"
+        else
+            echo "INACTIVE"
+        fi
+        ;;
+    *)
+        echo "Usage: $0 {start|stop|status}"
+        exit 1
+        ;;
+esac
