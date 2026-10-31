@@ -1,6 +1,6 @@
 # TorSurf
 
-> **Warning:** This project is unfinished and the install script is known to be broken. Do not install and run it unless you know what you are doing. Development may resume someday.
+> **Warning:** This project is solo maintained, so bug reports might be faced with some delay. Feel free to contribute!
 
 TorSurf is a similar project to [Parrot Security's AnonSurf](https://github.com/ParrotSec/anonsurf). It routes all of your system's IPv4 TCP and DNS traffic through the [Tor](https://www.torproject.org/) network using transparent proxying and nftables firewall rules, and it includes a terminal dashboard to monitor the connection.
 
