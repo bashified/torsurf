@@ -21,12 +21,13 @@ case "$1" in
         systemctl stop tor 2>/dev/null || true
         pkill -u toranon tor 2>/dev/null || true
         rm -f "$TOR_LOG"
+        install -m 644 -o toranon -g toranon /dev/null "$TOR_LOG"
 
         echo "Launching background proxy layer..."
         sudo -u toranon tor --runasdaemon 1 --log "notice file $TOR_LOG"
 
-        echo "Waiting for core handshake completion (this can take up to 30s)..."
-        TIMEOUT=30
+        echo "Waiting for core handshake completion (this can take up to 120s)..."
+        TIMEOUT=120
         while ! grep -q "Bootstrapped 100%" "$TOR_LOG" 2>/dev/null; do
             sleep 1
             TIMEOUT=$((TIMEOUT - 1))
@@ -44,6 +45,7 @@ case "$1" in
 table ip6 torsurf_kill_v6 {
     chain output {
         type filter hook output priority filter; policy drop;
+        oifname "lo" accept
     }
 }
 
@@ -78,8 +80,14 @@ table ip torsurf {
         # Allow established network sessions to maintain state flow
         ct state established,related accept
 
-        # Drop any raw UDP or stray traffic trying to bypass the proxy
-        drop
+        # Redirected TCP (new connections included) is handled by Tor's TransPort
+        meta l4proto tcp accept
+
+        # DNS was redirected to Tor's DNSPort above
+        udp dport { 53, 5353 } accept
+
+        # Drop any other raw UDP trying to bypass the proxy
+        meta l4proto udp drop
     }
 }
 EOF

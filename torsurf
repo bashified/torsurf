@@ -90,7 +90,7 @@ render_dashboard() {
     echo -e "${CYAN}┃${RESET}                   ${BOLD}${GREEN}⚡ TORSURF ANONYMITY CONSOLE ⚡${RESET}                    ${CYAN}┃${RESET}"
     echo -e "${CYAN}┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛${RESET}"
     echo -e "  ${BOLD}STATUS:${RESET}             ${GREEN}● Connected & Routing Securely${RESET}"
-    echo -e "  ${BOLD}TUNNEL GATEWAY:${RESET}     ${CYAN}TransPort (9040)${RESET} -> ${CYAN}DNSPort (9053)${RESET}"
+    echo -e "  ${BOLD}TUNNEL GATEWAY:${RESET}     ${CYAN}TransPort (9040)${RESET} -> ${CYAN}DNSPort (5353)${RESET}"
     echo -e "  ${BOLD}VIRTUAL EXIT IP:${RESET}    ${WHITE_ON_PURPLE} $ip ${RESET}"
     echo -e "${CYAN}───────────────────────────────────────────────────────────────────────${RESET}"
     
